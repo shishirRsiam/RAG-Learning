@@ -18,6 +18,19 @@ from app.vectorstore import count_chunks, get_chroma_client
 
 app = FastAPI(title="RAG Learning API", version="1.0")
 
+
+@app.middleware("http")
+async def utf8_json(request, call_next):
+    """সব JSON উত্তরের header এ charset=utf-8 যোগ করি (error উত্তর সহ)।
+
+    না বললে Windows PowerShell 5.1 উত্তরকে Latin-1 ধরে পড়ে, আর বাংলা লেখা ভেঙে যায়।
+    """
+    response = await call_next(request)
+    if response.headers.get("content-type") == "application/json":
+        response.headers["content-type"] = "application/json; charset=utf-8"
+    return response
+
+
 # একসাথে দুইবার ingest চললে collection নষ্ট হতে পারে, তাই lock
 _ingest_lock = threading.Lock()
 
@@ -25,6 +38,14 @@ _ingest_lock = threading.Lock()
 class QuestionRequest(BaseModel):
     question: str = Field(..., min_length=1, examples=["What is the annual leave policy?"])
     k: int = Field(config.TOP_K, ge=1, le=20, description="কয়টা চাঙ্ক retrieve করবো")
+
+
+def upstream_error(e: Exception) -> HTTPException:
+    """Gemini বা ChromaDB তে সমস্যা হলে শুধু "Internal Server Error" না দিয়ে আসল কারণ জানাই।
+
+    502 (Bad Gateway) মানে: আমাদের সার্ভার ঠিক আছে, কিন্তু যার উপর নির্ভর করে (upstream) সে ব্যর্থ হয়েছে।
+    """
+    return HTTPException(502, f"{type(e).__name__}: {e}")
 
 
 @app.get("/health")
@@ -40,9 +61,13 @@ def health():
 
 @app.get("/stats")
 def stats():
+    try:
+        chunks = count_chunks()
+    except Exception as e:
+        raise upstream_error(e)
     return {
         "collection": config.COLLECTION_NAME,
-        "chunks": count_chunks(),
+        "chunks": chunks,
         "files": list_documents(),
         "chat_model": config.CHAT_MODEL,
         "embedding_model": config.EMBEDDING_MODEL,
@@ -65,15 +90,18 @@ def list_documents() -> list[str]:
 @app.post("/upload")
 def upload(files: list[UploadFile]):
     """ফাইল docs ফোল্ডারে সেভ করে। এরপর /ingest কল করলে Vector DB তে যাবে।"""
-    saved = []
-    for f in files:
-        name = os.path.basename(f.filename or "")
-        if os.path.splitext(name)[1].lower() not in config.SUPPORTED_EXTENSIONS:
-            raise HTTPException(400, f"'{name}' সাপোর্টেড না। শুধু: {sorted(config.SUPPORTED_EXTENSIONS)}")
+    # basename: "../../etc/x.pdf" এর মতো নাম দিয়ে docs ফোল্ডারের বাইরে লেখা আটকাই
+    names = [os.path.basename(f.filename or "") for f in files]
+
+    # আগে সব নাম চেক, তারপর সেভ — যাতে একটা ভুল ফাইলের জন্য অর্ধেক সেভ হয়ে না থাকে
+    bad = [n for n in names if os.path.splitext(n)[1].lower() not in config.SUPPORTED_EXTENSIONS]
+    if bad:
+        raise HTTPException(400, f"সাপোর্টেড না: {bad}। শুধু: {sorted(config.SUPPORTED_EXTENSIONS)}")
+
+    for f, name in zip(files, names):
         with open(os.path.join(config.DOCS_DIR, name), "wb") as out:
             out.write(f.file.read())
-        saved.append(name)
-    return {"saved": saved}
+    return {"saved": names}
 
 
 @app.post("/ingest")
@@ -85,6 +113,8 @@ def ingest():
         return run_ingestion()
     except ValueError as e:
         raise HTTPException(400, str(e))
+    except Exception as e:
+        raise upstream_error(e)
     finally:
         _ingest_lock.release()
 
@@ -92,13 +122,19 @@ def ingest():
 @app.post("/search")
 def search(req: QuestionRequest):
     """শুধু Retrieval — LLM ছাড়া। দেখার জন্য যে retriever কোন চাঙ্কগুলো আনছে।"""
-    return {"question": req.question, "results": rag.retrieve(req.question, req.k)}
+    try:
+        return {"question": req.question, "results": rag.retrieve(req.question, req.k)}
+    except Exception as e:
+        raise upstream_error(e)
 
 
 @app.post("/ask")
 def ask(req: QuestionRequest):
     """পুরো RAG — retrieve করে LLM দিয়ে উত্তর বানায়।"""
-    return {"question": req.question, **rag.answer(req.question, req.k)}
+    try:
+        return {"question": req.question, **rag.answer(req.question, req.k)}
+    except Exception as e:
+        raise upstream_error(e)
 
 
 @app.post("/ask/stream")

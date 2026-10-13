@@ -107,6 +107,7 @@ flowchart LR
 ```
 RAG-Learning/
 ├── docker-compose.yml        ← সব service এর সংজ্ঞা (শুরু করো এখান থেকে)
+├── API.md                    ← API এর পূর্ণ ডকুমেন্টেশন + টেস্ট চেকলিস্ট
 ├── .env.example              ← কপি করে .env বানাও, API key বসাও
 ├── docs/                     ← তোমার নিজের ডকুমেন্ট এখানে (git এ যায় না)
 ├── sample_docs/              ← টেস্ট করার জন্য কাল্পনিক কোম্পানির ডকুমেন্ট
@@ -337,6 +338,8 @@ search অর্থহীন রেজাল্ট দেবে, বা dimensio
 
 ### ৪. API — [backend/app/main.py](backend/app/main.py)
 
+> প্রতিটা endpoint এর request/response, ভেতরে কী হয়, error, আর টেস্ট চেকলিস্ট — সব বিস্তারিত **[API.md](API.md)** তে।
+
 | Method | Endpoint | কাজ |
 | --- | --- | --- |
 | GET | `/health` | API আর ChromaDB চলছে কিনা |
@@ -409,6 +412,9 @@ UI বানানোর সবচেয়ে দ্রুত উপায়; 
 ---
 
 ## ৬. API নিজে চালিয়ে দেখো
+
+> এখানে দ্রুত কয়েকটা উদাহরণ। পুরো গাইড — প্রতিটা endpoint, error, PowerShell এ বাংলা পাঠানোর নিয়ম, নিরাপদ sandbox,
+> আর ২১ ধাপের টেস্ট চেকলিস্ট — **[API.md](API.md)** তে।
 
 সবচেয়ে সহজ: ব্রাউজারে **http://localhost:8000/docs** খোলো (Swagger UI)। যেকোনো endpoint এ ক্লিক → **Try it out** → **Execute**।
 

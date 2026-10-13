@@ -11,3 +11,6 @@ docs/*
 
 # পুরনো লোকাল ChromaDB (Docker ভার্সন named volume ব্যবহার করে)
 chroma_db/
+
+# API টেস্টের sandbox ফোল্ডার (API.md দেখো)
+sandbox_docs/
