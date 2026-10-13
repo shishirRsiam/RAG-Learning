@@ -5,15 +5,25 @@
 
 পুরো সিস্টেম Docker এ চলে: তোমার কম্পিউটারে Python, ChromaDB বা অন্য কিছু install করতে হবে না।
 
-![UI screenshot](assets/ui-screenshot.png)
+![Web chat UI](assets/web-ui-light.png)
+
+<details>
+<summary>Dark mode আর মোবাইল দেখো</summary>
+
+![Dark mode](assets/web-ui-dark.png)
+
+<img src="assets/web-ui-mobile.png" alt="Mobile" width="300">
+
+</details>
 
 **এই প্রজেক্ট থেকে যা শিখবে:**
 
 - RAG এর দুইটা পাইপলাইন (Ingestion আর Retrieval) কোডে কীভাবে লেখা হয়
 - Chunking, Embedding, Vector DB, Similarity Search আসলে কী
 - LLM কে কীভাবে prompt দিতে হয় যাতে সে বানিয়ে না বলে
-- FastAPI দিয়ে backend আর Streamlit দিয়ে UI
-- Docker Compose দিয়ে একাধিক service একসাথে চালানো
+- FastAPI দিয়ে backend, আর তার উপর দুইটা UI: HTML/CSS/JS chat UI আর Streamlit
+- ChatGPT এর মতো "টাইপ হতে হতে" উত্তর (streaming / Server-Sent Events)
+- nginx দিয়ে reverse proxy, আর Docker Compose দিয়ে একাধিক service একসাথে চালানো
 
 ---
 
@@ -64,8 +74,10 @@ vector কাছাকাছি হয়।** তাই "work from home" আর
 
 ```mermaid
 flowchart LR
-    User["👤 তুমি (Browser)"] -->|"localhost:8501"| UI["ui<br/>Streamlit"]
-    UI -->|"HTTP api:8000"| API["api<br/>FastAPI"]
+    User["👤 তুমি (Browser)"] -->|"localhost:3000"| Web["web<br/>nginx + HTML/JS<br/>(Chat UI)"]
+    User -.->|"localhost:8501"| ST["streamlit<br/>(Inspector UI)"]
+    Web -->|"/api/... → api:8000"| API["api<br/>FastAPI"]
+    ST -->|"HTTP api:8000"| API
     API -->|"HTTP chromadb:8000"| DB[("chromadb<br/>Vector DB")]
     API -->|"HTTPS"| Gemini["☁️ Google Gemini API<br/>embedding + LLM"]
     Docs["📁 ./docs"] -.->|"bind mount"| API
@@ -78,11 +90,13 @@ flowchart LR
 | --- | --- | --- | --- |
 | `chromadb` | Vector DB — চাঙ্কের টেক্সট, vector আর metadata রাখে, similarity search করে | অফিশিয়াল image `chromadb/chroma` | http://localhost:8001/api/v2/heartbeat |
 | `api` | পুরো RAG লজিক: ingestion, retrieval, LLM কল | [backend/app/](backend/app/) | http://localhost:8000/docs |
-| `ui` | চ্যাট UI — শুধু `api` কে কল করে, নিজে কোনো RAG লজিক জানে না | [frontend/streamlit_app.py](frontend/streamlit_app.py) | http://localhost:8501 |
+| `web` | **মূল চ্যাট UI** — nginx static HTML/CSS/JS দেয়, আর `/api/...` রিকোয়েস্ট `api` তে পাঠায় | [frontend/](frontend/) | **http://localhost:3000** |
+| `streamlit` | দ্বিতীয় UI (Python দিয়ে লেখা) — RAG এর ধাপ ধরে ধরে দেখার "Inspector" | [streamlit/streamlit_app.py](streamlit/streamlit_app.py) | http://localhost:8501 |
 | `ingest` | `api` এর **একই image**, শুধু command আলাদা — ingestion চালিয়ে বন্ধ হয়ে যায় | [backend/app/ingest.py](backend/app/ingest.py) | `docker compose run --rm ingest` |
 
 > **কেন এভাবে আলাদা আলাদা container?** বাস্তবের প্রোডাকশন সিস্টেম এভাবেই বানানো হয়: Vector DB আলাদা
-> সার্ভার, backend আলাদা, UI আলাদা। একটা বদলালে (যেমন Streamlit ফেলে React) বাকিগুলো ছুঁতে হয় না।
+> সার্ভার, backend আলাদা, UI আলাদা। একটা বদলালে বাকিগুলো ছুঁতে হয় না। এর প্রমাণ এই প্রজেক্টেই আছে —
+> **দুইটা সম্পূর্ণ আলাদা UI** (`web` আর `streamlit`) একই `api` ব্যবহার করে, কেউ কারো কোড জানে না।
 
 শুধু Gemini (embedding + LLM) Google এর ক্লাউডে চলে; বাকি সব তোমার মেশিনের Docker এ।
 
@@ -108,7 +122,15 @@ RAG-Learning/
 │       ├── main.py           ← FastAPI endpoints
 │       └── inspect_db.py     ← Vector DB এর ভেতরে উঁকি দেওয়ার টুল
 │
-├── frontend/                 ← "ui" container
+├── frontend/                 ← "web" container — মূল চ্যাট UI (কোনো build tool নেই)
+│   ├── Dockerfile
+│   ├── nginx.conf            ← static ফাইল + /api reverse proxy
+│   └── public/
+│       ├── index.html        ← পেজের কাঠামো (sidebar, chat, input বক্স)
+│       ├── styles.css        ← ডিজাইন, light/dark theme, মোবাইল
+│       └── app.js            ← API কল, streaming পড়া, markdown, citation
+│
+├── streamlit/                ← "streamlit" container — Inspector UI
 │   ├── Dockerfile
 │   ├── requirements.txt
 │   └── streamlit_app.py
@@ -121,7 +143,7 @@ RAG-Learning/
 ```
 
 **কোড পড়ার সাজেস্টেড ক্রম:** `docker-compose.yml` → `config.py` → `ingest.py` → `vectorstore.py` → `rag.py` →
-`main.py` → `streamlit_app.py`
+`main.py` → `frontend/nginx.conf` → `frontend/public/app.js` → `streamlit_app.py`
 
 ---
 
@@ -168,14 +190,15 @@ docker compose up --build -d
 docker compose ps
 ```
 
-তিনটা container (`chromadb`, `api`, `ui`) **Up** দেখাবে, আর `api` / `chromadb` এর পাশে **(healthy)**।
+চারটা container (`chromadb`, `api`, `web`, `streamlit`) **Up** দেখাবে, আর পাশে **(healthy)**।
 
 ### ধাপ ৪: Ingest করো (knowledge-base বানাও)
 
 দুইভাবে করা যায় — যেকোনো একটা:
 
-**(ক) UI থেকে:** http://localhost:8501 খোলো → বাম পাশের sidebar এ **🔄 Ingest (rebuild index)** চাপো।
-নতুন ফাইল আপলোড করতে চাইলে sidebar এর **Upload documents** দিয়ে আপলোড করে তারপর Ingest চাপো।
+**(ক) UI থেকে:** http://localhost:3000 খোলো → বাম পাশের sidebar এ **Rebuild index** চাপো।
+নতুন ফাইল যোগ করতে চাইলে sidebar এর বক্সে ফাইল টেনে ছেড়ে দাও (drag & drop) বা ক্লিক করে বেছে নাও,
+তারপর **Rebuild index** চাপো।
 
 **(খ) কমান্ড লাইন থেকে:**
 
@@ -197,7 +220,7 @@ docker compose run --rm ingest
 
 ### ধাপ ৫: প্রশ্ন করো 🎉
 
-http://localhost:8501 এ গিয়ে প্রশ্ন করো। Sample ডকুমেন্টের জন্য কিছু প্রশ্ন:
+**http://localhost:3000** এ গিয়ে প্রশ্ন করো (খালি পেজে নিচের উদাহরণগুলোর কার্ডে ক্লিক করলেও হবে):
 
 | প্রশ্ন | কী শেখায় |
 | --- | --- |
@@ -207,8 +230,22 @@ http://localhost:8501 এ গিয়ে প্রশ্ন করো। Sample
 | What is the maximum file size on the Free plan? | অন্য ডকুমেন্ট (FAQ) থেকে retrieval |
 | Who is the CEO of Nexora Tech? | ডকুমেন্টে নেই → "জানি না" বলা উচিত, বানিয়ে না বলা |
 
-প্রতিটা উত্তরের নিচে **📎 Retrieved chunks** খুললে দেখবে কোন চাঙ্কগুলো LLM কে দেওয়া হয়েছিল আর তাদের
-similarity score কত। Sidebar এ **LLM prompt দেখাও** চালু করলে LLM আসলে যে prompt পেয়েছে সেটাও দেখবে।
+UI তে যা যা দেখবে:
+
+- **লাইভ pipeline:** উত্তরের উপরে `🔎 4টা চাঙ্ক পাওয়া গেছে · 0.7s → ⚡ উত্তর লেখা হয়েছে · 1.4s` — RAG এর
+  দুই ধাপ (retrieval আর generation) আলাদা আলাদা কত সময় নিল।
+- **Streaming:** উত্তর ChatGPT এর মতো টাইপ হতে হতে আসে। মাঝপথে থামাতে চাইলে ■ বাটন।
+- **Citation:** উত্তরের ভেতরের `1`, `2` এ ক্লিক করলে ঠিক ঐ সোর্স চাঙ্কটা খুলে হাইলাইট হবে।
+- **সোর্স চাঙ্ক:** কোন ফাইল, কোন পেজ, similarity score (বার দিয়ে), আর চাঙ্কের আসল টেক্সট।
+- **শুধু Search মোড:** উপরের সুইচ — LLM ছাড়া শুধু retriever কী আনছে দেখো। উত্তর খারাপ হলে প্রথমে
+  এখানে দেখো: সঠিক চাঙ্ক আসছে তো? না আসলে সমস্যা retrieval এ (chunking/embedding), LLM এ না।
+- **Settings:** Top-K slider, **LLM prompt দেখাও** (LLM আসলে কী পেল), dark/light theme (নিচের বাটন)।
+- চ্যাট রিফ্রেশ করলেও থাকে (ব্রাউজারের localStorage এ); **নতুন চ্যাট** দিয়ে মুছে ফেলো।
+
+**Streamlit Inspector** (http://localhost:8501) একই কাজ করে, কিন্তু Python দিয়ে লেখা আরেকটা সহজ UI —
+দুটো পাশাপাশি খুলে দেখো, একই API থেকে একই উত্তর আসছে।
+
+![Streamlit Inspector](assets/streamlit-ui.png)
 
 ### বন্ধ করা
 
@@ -259,6 +296,7 @@ docs/ ফোল্ডার ──load_documents()──> Documents ──split_
 | Context | `build_context()` | চাঙ্কগুলোকে `[1] (ফাইলের নাম, পেজ) টেক্সট...` আকারে সাজায়, যাতে LLM `[1]`, `[2]` দিয়ে source উল্লেখ করতে পারে। |
 | Generate | `generate()` | Prompt বানিয়ে Gemini কে পাঠায়। |
 | সব একসাথে | `answer()` | উপরের তিনটা ধাপ চালিয়ে উত্তর + source চাঙ্ক + আসল prompt ফেরত দেয়। |
+| সব একসাথে (streaming) | `answer_stream()` | একই কাজ, কিন্তু ফলাফল টুকরো টুকরো `yield` করে: আগে `sources`, তারপর LLM এর প্রতিটা `token`, শেষে `done` (সময়ের হিসাব সহ)। `invoke()` এর বদলে `llm.stream()` ব্যবহার করে। |
 
 LangChain এর তৈরি "chain" (`create_retrieval_chain` ইত্যাদি) ইচ্ছে করেই ব্যবহার করা হয়নি — প্রতিটা ধাপ
 সাধারণ Python ফাংশনে লেখা, যাতে কোথায় কী হচ্ছে স্পষ্ট দেখা যায়।
@@ -280,11 +318,16 @@ Human: Context:
 ...
 
 Question: What happens to deleted files on the Business plan?
+
+Answer in English.
 ```
 
 - **System message** = নিয়মকানুন (সব প্রশ্নে একই)।
 - **Human message** = এই প্রশ্নের context + প্রশ্ন।
 - "ONLY the provided context" আর "say you don't know" — এই দুইটা লাইনই **hallucination** (বানিয়ে বলা) কমানোর মূল চাবি।
+- **শেষের `Answer in English.` / `Answer in Bengali.`** — এটা LLM ঠিক করে না, কোড ঠিক করে (`detect_language()`:
+  প্রশ্নে একটাও বাংলা অক্ষর থাকলে Bengali)। কারণ: context এ বাংলা চাঙ্ক থাকলে ছোট মডেল প্রায়ই ইংরেজি প্রশ্নেরও
+  বাংলায় উত্তর দিয়ে ফেলত। শিক্ষা: **যেটা কোড দিয়ে নিশ্চিতভাবে ঠিক করা যায়, সেটা LLM এর উপর ছাড়বে না।**
 
 ### ৩. সবচেয়ে গুরুত্বপূর্ণ নিয়ম: একই Embedding মডেল
 
@@ -302,15 +345,66 @@ search অর্থহীন রেজাল্ট দেবে, বা dimensio
 | POST | `/upload` | ফাইল `docs/` এ সেভ (multipart form, field নাম `files`) |
 | POST | `/ingest` | পুরো knowledge-base নতুন করে বানাও |
 | POST | `/search` | **শুধু retrieval** — LLM ছাড়া, কোন চাঙ্ক আসছে দেখার জন্য |
-| POST | `/ask` | **পুরো RAG** — উত্তর + source + prompt |
+| POST | `/ask` | **পুরো RAG** — পুরো উত্তর একবারে (উত্তর + source + prompt) |
+| POST | `/ask/stream` | **পুরো RAG, streaming** — উত্তর টুকরো টুকরো আসে (Server-Sent Events)। web UI এটা ব্যবহার করে। |
 
-### ৫. UI — [frontend/streamlit_app.py](frontend/streamlit_app.py)
+### ৫. Streaming কীভাবে কাজ করে (Server-Sent Events)
 
-UI তে কোনো RAG লজিক নেই, শুধু `requests` দিয়ে API কল করে। দুইটা ট্যাব:
+সাধারণ HTTP রিকোয়েস্টে সার্ভার পুরো উত্তর তৈরি করে **একবারে** পাঠায় — LLM এর লেখা শেষ না হওয়া পর্যন্ত
+ইউজার খালি স্ক্রিন দেখে। `/ask/stream` এ সার্ভার কানেকশন খোলা রেখে **যত লেখা হয় তত পাঠাতে থাকে**:
 
-- **💬 Chat (full RAG)** — `/ask` কল করে
-- **🔍 Retrieval Playground** — `/search` কল করে। LLM ছাড়া শুধু retriever কী আনছে দেখো। RAG এর উত্তর খারাপ হলে
-  প্রথমে এখানে দেখো: সঠিক চাঙ্ক আসছে তো? না আসলে সমস্যা retrieval এ (chunking/embedding), LLM এ না।
+```
+event: sources
+data: {"sources": [...4টা চাঙ্ক...], "prompt": "...", "retrieval_ms": 712}
+
+event: token
+data: {"text": "Employees who have completed"}
+
+event: token
+data: {"text": " their 3-month probation may work"}
+
+...
+
+event: done
+data: {"retrieval_ms": 712, "generation_ms": 1408}
+```
+
+তিনটা জায়গায় এটা সামলানো হয়েছে:
+
+1. **backend** — [rag.py](backend/app/rag.py) এর `answer_stream()` টুকরোগুলো `yield` করে, আর [main.py](backend/app/main.py)
+   এর `/ask/stream` সেগুলোকে উপরের ফরম্যাটে লিখে `StreamingResponse` দিয়ে পাঠায়।
+2. **nginx** — [nginx.conf](frontend/nginx.conf) এ `proxy_buffering off;` — নাহলে nginx পুরো উত্তর জমিয়ে তারপর
+   একবারে পাঠাত, আর streaming এর মজাটাই থাকত না।
+3. **ব্রাউজার** — [app.js](frontend/public/app.js) এর `streamEvents()` `fetch()` এর রেসপন্স টুকরো টুকরো পড়ে,
+   ফাঁকা লাইন (`\n\n`) পেলেই একটা event পার্স করে স্ক্রিনে বসায়।
+
+নিজে দেখতে: ব্রাউজারে **F12 → Network** ট্যাব খোলো, একটা প্রশ্ন করো, তারপর `stream` রিকোয়েস্টে ক্লিক করে
+**EventStream** (বা Response) দেখো — event গুলো একটা একটা করে আসছে।
+
+### ৬. দুইটা UI
+
+দুটো UI তেই কোনো RAG লজিক নেই — শুধু API কল করে ফলাফল দেখায়।
+
+**Web Chat UI — [frontend/](frontend/)** (মূল UI, http://localhost:3000)
+
+- **কোনো framework বা build tool নেই** — সাধারণ HTML + CSS + JavaScript, যাতে পড়ে বোঝা যায়।
+- [nginx.conf](frontend/nginx.conf): `/` তে static ফাইল দেয়, `/api/...` রিকোয়েস্ট `http://api:8000/...` তে পাঠায়
+  (**reverse proxy**)। ফলে ব্রাউজার শুধু `localhost:3000` চেনে, আর UI ও API একই origin হওয়ায় **CORS** এর ঝামেলা নেই।
+- [app.js](frontend/public/app.js) এর গুরুত্বপূর্ণ ফাংশন:
+
+  | ফাংশন | কাজ |
+  | --- | --- |
+  | `send()` | প্রশ্ন পাঠানো শুরু — মোড অনুযায়ী `runChat()` বা `runSearch()` |
+  | `runChat()` | `/ask/stream` থেকে event পড়ে: `sources` → চাঙ্ক দেখাও, `token` → উত্তরে যোগ করো, `done` → শেষ |
+  | `streamEvents()` | Server-Sent Events পার্সার (উপরে দেখো) |
+  | `renderMarkdown()` | LLM এর উত্তরের `**bold**`, লিস্ট, `[1]` citation → HTML। আগে সব টেক্সট escape করে, তাই নিরাপদ (XSS হয় না)। |
+  | `traceHTML()` | উত্তরের উপরের লাইভ pipeline (🔎 retrieval → ⚡ generation) |
+  | `uploadFiles()`, `ingest()` | sidebar এর আপলোড আর Rebuild index |
+
+**Streamlit Inspector — [streamlit/streamlit_app.py](streamlit/streamlit_app.py)** (http://localhost:8501)
+
+Python দিয়ে লেখা সহজ UI: **Chat** ট্যাব `/ask` কল করে, **Retrieval Playground** ট্যাব `/search`। Python জানলে
+UI বানানোর সবচেয়ে দ্রুত উপায়; কিন্তু ডিজাইনের উপর নিয়ন্ত্রণ কম — তাই মূল UI HTML/JS এ।
 
 ---
 
@@ -334,6 +428,9 @@ $r.sources | Select-Object source, similarity
 
 # শুধু retrieval
 Invoke-RestMethod -Method Post -Uri http://localhost:8000/search -ContentType "application/json" -Body $body
+
+# streaming — Windows এর আসল curl হলো curl.exe; -N মানে যা আসে সাথে সাথে দেখাও
+curl.exe -N -X POST http://localhost:8000/ask/stream -H "Content-Type: application/json" -d '{\"question\": \"How much is the learning budget?\"}'
 ```
 
 **Git Bash / Linux / Mac:**
@@ -345,9 +442,16 @@ curl -X POST http://localhost:8000/ask \
   -H "Content-Type: application/json" \
   -d '{"question": "How much is the learning budget?", "k": 3}'
 
+curl -N -X POST http://localhost:8000/ask/stream \
+  -H "Content-Type: application/json" \
+  -d '{"question": "How much is the learning budget?"}'
+
 curl -X POST http://localhost:8000/upload -F "files=@my_file.pdf"
 curl -X POST http://localhost:8000/ingest
 ```
+
+> Web UI নিজে `http://localhost:8000` কল করে না — কল করে `http://localhost:3000/api/...`, আর nginx সেটা `api` তে পাঠায়।
+> ব্রাউজারে http://localhost:3000/api/health খুলে দেখো — একই উত্তর আসবে।
 
 `/ask` এর রেসপন্স:
 
@@ -379,11 +483,12 @@ curl -X POST http://localhost:8000/ingest
 | **Image vs Container** | — | Image = রেসিপি/টেমপ্লেট (Dockerfile থেকে বানানো), Container = সেই image থেকে চালু হওয়া একটা প্রসেস। একটা image থেকে অনেক container চালানো যায়। |
 | **Dockerfile + layer cache** | [backend/Dockerfile](backend/Dockerfile) | আগে শুধু `requirements.txt` কপি করে `pip install`, তারপর কোড কপি। তাই কোড বদলালে প্যাকেজ আবার ডাউনলোড হয় না — cache থেকে আসে। |
 | **Service নাম = hostname** | `CHROMA_HOST: chromadb`, `API_URL: http://api:8000` | Compose সব service কে একটা network এ রাখে; একে অপরকে service নাম দিয়ে ডাকে। `localhost` container এর ভেতরে মানে **ঐ container নিজেই**, তোমার পিসি না! |
-| **Port mapping** | `"8001:8000"` | `হোস্ট_পোর্ট:container_পোর্ট`। ChromaDB container এর ভেতরে 8000 এ চলে, কিন্তু হোস্টে 8000 এ api আছে, তাই হোস্টে 8001 দিয়ে খোলা হয়েছে। Container গুলো নিজেদের মধ্যে কথা বলে ভেতরের পোর্ট (8000) দিয়েই। |
+| **Port mapping** | `"8001:8000"`, `"3000:80"` | `হোস্ট_পোর্ট:container_পোর্ট`। ChromaDB container এর ভেতরে 8000 এ চলে, কিন্তু হোস্টে 8000 এ api আছে, তাই হোস্টে 8001 দিয়ে খোলা হয়েছে। একইভাবে nginx ভেতরে 80 তে চলে, হোস্টে 3000। Container গুলো নিজেদের মধ্যে কথা বলে ভেতরের পোর্ট দিয়েই। |
+| **Reverse proxy** | [frontend/nginx.conf](frontend/nginx.conf) | `web` এর nginx `/api/...` রিকোয়েস্ট `http://api:8000/...` তে পাঠায়। ব্রাউজার শুধু একটা ঠিকানা (localhost:3000) চেনে। `resolver 127.0.0.11` = Docker এর ভেতরের DNS, তাই api container নতুন IP পেলেও nginx খুঁজে নেয়। |
 | **Named volume** | `chroma_data:/data` | Docker নিজে ম্যানেজ করে এমন স্টোরেজ। `docker compose down` দিলেও Vector DB এর ডাটা থাকে; `down -v` দিলে মুছে যায়। |
 | **Bind mount** | `./docs:/app/docs` | তোমার পিসির ফোল্ডার সরাসরি container এর ভেতরে দেখা যায়। পিসিতে ফাইল রাখলে container সাথে সাথে দেখে; UI থেকে আপলোড করলে পিসির `docs/` এ চলে আসে। `ingest` এ `:ro` = read-only। |
 | **env_file / environment** | `env_file: .env` | Secret (API key) কোডে না লিখে environment variable হিসেবে দেওয়া। |
-| **healthcheck + depends_on** | `condition: service_healthy` | `api` শুরু হয় ChromaDB **healthy** হওয়ার পরে, `ui` শুরু হয় `api` healthy হওয়ার পরে। শুধু "চালু হয়েছে" না, "রেডি" হওয়া পর্যন্ত অপেক্ষা। |
+| **healthcheck + depends_on** | `condition: service_healthy` | `api` শুরু হয় ChromaDB **healthy** হওয়ার পরে, `web` আর `streamlit` শুরু হয় `api` healthy হওয়ার পরে। শুধু "চালু হয়েছে" না, "রেডি" হওয়া পর্যন্ত অপেক্ষা। |
 | **একই image, ভিন্ন command** | `ingest` service | `api` আর `ingest` একই `rag-learning-backend` image ব্যবহার করে; `ingest` শুধু `python -m app.ingest` চালায়। |
 | **profiles** | `profiles: ["tools"]` | `ingest` সাধারণ `docker compose up` এ চালু হয় না; শুধু `docker compose run ingest` দিলে চলে। |
 | **restart policy** | `restart: unless-stopped` | Container crash করলে বা পিসি রিস্টার্ট হলে Docker নিজেই আবার চালু করবে। |
@@ -395,8 +500,12 @@ curl -X POST http://localhost:8000/ingest
 docker compose up --watch
 ```
 
-এখন `backend/app/` এর কোনো ফাইল সেভ করলেই সেটা `api` container এ কপি হয়ে container রিস্টার্ট হবে, আর
-`frontend/streamlit_app.py` সেভ করলে UI নিজে থেকে রিলোড হবে। `requirements.txt` বদলালে image আবার build হবে।
+এখন:
+
+- `backend/app/` এর কোনো ফাইল সেভ করলে → `api` container এ কপি হয়ে রিস্টার্ট হবে।
+- `frontend/public/` এর HTML/CSS/JS সেভ করলে → container এ কপি হবে; ব্রাউজার রিফ্রেশ দিলেই নতুনটা দেখবে।
+- `streamlit/streamlit_app.py` সেভ করলে → Streamlit নিজে থেকে রিলোড হবে।
+- `requirements.txt` বা `nginx.conf` বদলালে → image আবার build হবে।
 (`Ctrl+C` দিলে watch বন্ধ হবে।)
 
 Watch ছাড়া চালালে কোড বদলানোর পর: `docker compose up --build -d`
@@ -417,7 +526,7 @@ Watch ছাড়া চালালে কোড বদলানোর পর:
    ```bash
    docker compose exec api python -m app.inspect_db "How many days can I work from home?"
    ```
-   এটা numpy দিয়ে cosine similarity `(a·b) / (|a|·|b|)` হিসাব করে। UI এর Retrieval Playground এ একই প্রশ্ন দিয়ে দেখো —
+   এটা numpy দিয়ে cosine similarity `(a·b) / (|a|·|b|)` হিসাব করে। UI এর **শুধু Search** মোডে একই প্রশ্ন দিয়ে দেখো —
    সংখ্যাগুলো হুবহু মিলবে। অর্থাৎ retriever কোনো জাদু না, শুধু এই অংক!
 
 3. **Chunk size বদলাও** — `.env` এ `CHUNK_SIZE=300` আর `CHUNK_OVERLAP=50` দাও, তারপর:
@@ -425,7 +534,7 @@ Watch ছাড়া চালালে কোড বদলানোর পর:
    docker compose up -d          # নতুন env নিয়ে api রিস্টার্ট
    docker compose run --rm ingest
    ```
-   চাঙ্ক সংখ্যা কত হলো? Retrieval Playground এ একই প্রশ্নের রেজাল্ট কীভাবে বদলালো? খুব ছোট চাঙ্কে context হারায়,
+   চাঙ্ক সংখ্যা কত হলো? **শুধু Search** মোডে একই প্রশ্নের রেজাল্ট কীভাবে বদলালো? খুব ছোট চাঙ্কে context হারায়,
    খুব বড় চাঙ্কে অপ্রাসঙ্গিক টেক্সট ঢোকে — এটাই chunking এর trade-off।
 
 4. **Top-K বদলাও** — sidebar এর slider দিয়ে K=1 আর K=8 এ একই প্রশ্ন করো। K কম হলে দরকারি তথ্য বাদ পড়তে পারে, বেশি হলে অপ্রাসঙ্গিক তথ্য ঢোকে।
@@ -433,15 +542,24 @@ Watch ছাড়া চালালে কোড বদলানোর পর:
 5. **Hallucination টেস্ট** — ডকুমেন্টে নেই এমন প্রশ্ন করো ("Who is the CEO?")। তারপর [rag.py](backend/app/rag.py) এর prompt থেকে
    "If the context does not contain the answer..." লাইনটা মুছে দিয়ে আবার করো। পার্থক্য দেখো।
 
-6. **ছোট vs বড় মডেল** — ডিফল্ট মডেল `gemini-3.5-flash-lite` (দ্রুত, কম খরচ)। "Who is the CEO of Nexora Tech?" (ইংরেজিতে)
-   জিজ্ঞেস করো — lite মডেল মাঝে মাঝে বাংলায় উত্তর দিয়ে ফেলে, কারণ context এ বাংলা ডকুমেন্ট আছে। এবার `.env` এ
-   `CHAT_MODEL=gemini-3.8-flash` দিয়ে `docker compose up -d` চালাও, আবার জিজ্ঞেস করো। বড় মডেল নির্দেশনা বেশি
-   ভালোভাবে মানে — কিন্তু ধীর আর বেশি খরচের। (Embedding মডেল একই থাকছে, তাই re-ingest লাগবে না।)
+6. **ভাষা কে ঠিক করবে — কোড না LLM?** `docker compose up --watch` চালু রেখে [rag.py](backend/app/rag.py) এর `PROMPT` থেকে
+   `\n\nAnswer in {language}.` অংশটা মুছে সেভ করো। তারপর ইংরেজিতে জিজ্ঞেস করো "Explain the leave policy in detail" বা
+   "Who is the CEO of Nexora Tech?"। ছোট মডেল প্রায়ই **বাংলায়** উত্তর দেবে — কারণ context এ বাংলা চাঙ্ক আছে, আর
+   system prompt এর "same language" নিয়ম সে ভুলে যায়। লাইনটা ফেরত বসাও — আবার ঠিক।
 
-7. **Cross-lingual search** — বাংলায় প্রশ্ন করো যার উত্তর ইংরেজি ডকুমেন্টে আছে, আর উল্টোটা। Embedding মডেল
+7. **ছোট vs বড় মডেল** — ডিফল্ট মডেল `gemini-3.5-flash-lite` (দ্রুত, কম খরচ)। `.env` এ `CHAT_MODEL=gemini-3.8-flash`
+   দিয়ে `docker compose up -d` চালাও, একই প্রশ্ন করো। উত্তর কতটা বদলালো? UI এর pipeline লাইনে generation এর
+   সময় কত বাড়লো? (Embedding মডেল একই থাকছে, তাই re-ingest লাগবে না।)
+
+8. **Cross-lingual search** — বাংলায় প্রশ্ন করো যার উত্তর ইংরেজি ডকুমেন্টে আছে, আর উল্টোটা। Embedding মডেল
    ভাষা না, **অর্থ** ধরে — তাই কাজ করে।
 
-8. **Prompt দেখো** — sidebar এ "LLM prompt দেখাও" চালু করো। LLM আসলে কী পাচ্ছে সেটা বোঝা RAG debugging এর সবচেয়ে বড় হাতিয়ার।
+9. **Prompt দেখো** — sidebar এ "LLM prompt দেখাও" চালু করো। LLM আসলে কী পাচ্ছে সেটা বোঝা RAG debugging এর সবচেয়ে বড় হাতিয়ার।
+
+10. **Streaming নিজের চোখে** — ব্রাউজারে F12 → **Network** ট্যাব খোলো, একটা প্রশ্ন করো, `stream` রিকোয়েস্টে ক্লিক করে
+    **EventStream** ট্যাব দেখো। `sources` → অনেকগুলো `token` → `done` — event গুলো একটা একটা করে আসছে।
+    তারপর [nginx.conf](frontend/nginx.conf) এ `proxy_buffering off;` কে `on` করে `docker compose up --build -d web` দাও —
+    এবার উত্তর টাইপ হবে না, একবারে আসবে। (পরে আবার `off` করে দিও।)
 
 ---
 
@@ -479,7 +597,7 @@ docker compose exec api python -c "from google import genai; c = genai.Client();
 | `docker compose up --build -d` | সব build করে background এ চালাও |
 | `docker compose ps` | কোন container চলছে, healthy কিনা |
 | `docker compose logs -f api` | api এর লাইভ লগ দেখো (`Ctrl+C` দিয়ে বের হও) |
-| `docker compose logs --tail 50 ui` | ui এর শেষ ৫০ লাইন লগ |
+| `docker compose logs --tail 50 web` | web (nginx) এর শেষ ৫০ লাইন লগ — কোন রিকোয়েস্ট আসছে দেখা যায় |
 | `docker compose run --rm ingest` | ingestion চালাও (`--rm` = শেষে container মুছে দাও) |
 | `docker compose exec api bash` | চলমান api container এর ভেতরে shell খোলো (`exit` দিয়ে বের হও) |
 | `docker compose restart api` | শুধু api রিস্টার্ট |
@@ -495,8 +613,14 @@ docker compose exec api python -c "from google import genai; c = genai.Client();
 **`docker compose up` এ error: "failed to connect to the docker API"**
 → Docker Desktop চালু নেই। চালু করো, নিচে বাম কোণায় "Engine running" দেখা পর্যন্ত অপেক্ষা করো।
 
-**UI তে "API তে কানেক্ট করা যাচ্ছে না"**
+**UI তে "API offline" বা "API তে কানেক্ট করা যাচ্ছে না"**
 → `docker compose ps` দেখো `api` healthy কিনা। না হলে `docker compose logs api` দেখো — সাধারণত Python error বা `.env` সমস্যা।
+
+**UI তে কোড বদলের পরও পুরনোটা দেখাচ্ছে**
+→ `docker compose up --build -d web` দাও (বা `--watch` মোডে চালাও), তারপর ব্রাউজারে `Ctrl + F5` (hard refresh)।
+
+**`Found orphan containers ([rag-learning-ui-1])` warning বা 8501 পোর্ট নিয়ে error**
+→ আগের ভার্সনে Streamlit service এর নাম ছিল `ui`, এখন `streamlit`। পুরনোটা মুছতে: `docker compose up -d --remove-orphans`
 
 **`API key not valid` / `PERMISSION_DENIED`**
 → `.env` এ `GOOGLE_API_KEY` ঠিক আছে কিনা দেখো (কোটেশন বা স্পেস ছাড়া)। `.env` বদলানোর পর `docker compose up -d` দিতে হবে।
@@ -515,7 +639,7 @@ docker compose exec api python -c "from google import genai; c = genai.Client();
 → PDF টা সম্ভবত স্ক্যান করা ছবি — ভেতরে টেক্সট নেই। এর জন্য OCR লাগবে (এই প্রজেক্টে নেই)।
 
 **`port is already allocated`**
-→ 8000, 8001 বা 8501 পোর্টে অন্য কিছু চলছে। `docker-compose.yml` এ বাম পাশের (হোস্ট) পোর্ট বদলাও, যেমন `"8502:8501"`।
+→ 3000, 8000, 8001 বা 8501 পোর্টে অন্য কিছু চলছে। `docker-compose.yml` এ বাম পাশের (হোস্ট) পোর্ট বদলাও, যেমন `"8502:8501"`।
 
 **Embedding মডেল বদলানোর পর search এ error বা আজব রেজাল্ট**
 → পুরনো vector গুলো আগের মডেলের। আবার ingest করো: `docker compose run --rm ingest`
@@ -529,7 +653,6 @@ docker compose exec api python -c "from google import genai; c = genai.Client();
 
 এই সিস্টেম বুঝে গেলে এগুলো যোগ করে দেখতে পারো (সহজ থেকে কঠিন):
 
-- **Streaming উত্তর** — উত্তর একবারে না এসে ChatGPT এর মতো লেখা হতে হতে আসবে (`llm.stream()`)
 - **Chat history** — আগের প্রশ্নের প্রসঙ্গ মনে রাখা ("আর sick leave?" এর মতো follow-up প্রশ্ন)
 - **Metadata filter** — নির্দিষ্ট ফাইলের মধ্যেই সার্চ করা (`similarity_search(..., filter={"source": "x.pdf"})`)
 - **Hybrid search** — vector search এর সাথে keyword search (BM25) মেলানো; নাম, কোড, নম্বর খুঁজতে ভালো

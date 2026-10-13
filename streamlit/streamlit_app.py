@@ -1,7 +1,7 @@
 """
-Streamlit UI — শুধু backend API (http://api:8000) কে কল করে।
+Streamlit "Inspector" UI — শুধু backend API (http://api:8000) কে কল করে।
 এখানে কোনো RAG লজিক নেই; সব লজিক backend এ। UI আর লজিক আলাদা রাখার এটাই সুবিধা:
-চাইলে এই UI ফেলে দিয়ে React/মোবাইল অ্যাপ বানিয়ে একই API ব্যবহার করা যায়।
+একই API এর উপর যত খুশি UI বানানো যায় — যেমন frontend/ এর web chat UI (HTML/JS)।
 """
 
 import os

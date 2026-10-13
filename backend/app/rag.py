@@ -8,6 +8,8 @@
 ফাংশনে লেখা, যাতে কোন ধাপে কী হচ্ছে স্পষ্ট দেখা যায়।
 """
 
+import time
+
 from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -27,9 +29,20 @@ PROMPT = ChatPromptTemplate.from_messages(
             "- If the context does not contain the answer, just say that you don't know based on "
             "the given documents. Do not cite anything and never make things up.",
         ),
-        ("human", "Context:\n{context}\n\nQuestion: {question}"),
+        # উত্তরের ভাষা মডেলের উপর না ছেড়ে কোডে ঠিক করে প্রশ্নের ঠিক পরে বলে দিই —
+        # নাহলে context এ বাংলা চাঙ্ক থাকলে ছোট মডেল ইংরেজি প্রশ্নেরও বাংলায় উত্তর দেয়।
+        ("human", "Context:\n{context}\n\nQuestion: {question}\n\nAnswer in {language}."),
     ]
 )
+
+
+def detect_language(text: str) -> str:
+    """প্রশ্নে একটাও বাংলা অক্ষর (Unicode U+0980–U+09FF) থাকলে Bengali, নাহলে English।"""
+    return "Bengali" if any("ঀ" <= ch <= "৿" for ch in text) else "English"
+
+
+def prompt_vars(question: str, context: str) -> dict:
+    return {"context": context, "question": question, "language": detect_language(question)}
 
 
 # ---------------------------------------------------------------------------
@@ -72,29 +85,68 @@ def build_context(chunks: list[dict]) -> str:
 # ---------------------------------------------------------------------------
 # ধাপ ৪: Prompt + LLM -> Answer
 # ---------------------------------------------------------------------------
-def generate(question: str, context: str) -> str:
+def get_llm() -> ChatGoogleGenerativeAI:
     # timeout না দিলে মডেল ব্যস্ত থাকলে রিকোয়েস্ট অনন্তকাল ঝুলে থাকতে পারে
-    llm = ChatGoogleGenerativeAI(model=config.CHAT_MODEL, timeout=120)
-    messages = PROMPT.format_messages(context=context, question=question)
-    response = llm.invoke(messages)
+    return ChatGoogleGenerativeAI(model=config.CHAT_MODEL, timeout=120)
+
+
+def generate(question: str, context: str) -> str:
+    messages = PROMPT.format_messages(**prompt_vars(question, context))
+    response = get_llm().invoke(messages)
     # Gemini 3 মডেল content কে লিস্ট আকারে দিতে পারে; .text সবসময় শুধু টেক্সটটা দেয়।
     return response.text
+
+
+EMPTY_DB_MESSAGE = "Vector DB খালি। আগে ডকুমেন্ট ingest করো।"
 
 
 def answer(question: str, k: int = config.TOP_K) -> dict:
     """পুরো RAG: retrieve -> context -> generate"""
     chunks = retrieve(question, k)
     if not chunks:
-        return {
-            "answer": "Vector DB খালি। আগে ডকুমেন্ট ingest করো।",
-            "sources": [],
-            "prompt": None,
-        }
+        return {"answer": EMPTY_DB_MESSAGE, "sources": [], "prompt": None}
 
     context = build_context(chunks)
     return {
         "answer": generate(question, context),
         "sources": chunks,
         # শেখার জন্য: LLM আসলে কী prompt পেয়েছে সেটাও ফেরত দিই
-        "prompt": PROMPT.format(context=context, question=question),
+        "prompt": PROMPT.format(**prompt_vars(question, context)),
+    }
+
+
+def answer_stream(question: str, k: int = config.TOP_K):
+    """answer() এর মতোই, কিন্তু উত্তর একবারে না দিয়ে টুকরো টুকরো (event) আকারে দেয়।
+
+    ChatGPT এর মতো "টাইপ হতে হতে" উত্তর দেখানোর জন্য। প্রতিটা yield হলো (event_name, data):
+      ("sources", {...})  -> retrieval শেষ, কোন চাঙ্ক পাওয়া গেল
+      ("token",   {...})  -> LLM এর উত্তরের পরের টুকরো
+      ("done",    {...})  -> শেষ, সাথে কোন ধাপে কত সময় লাগল
+    """
+    start = time.perf_counter()
+    chunks = retrieve(question, k)
+    retrieval_ms = round((time.perf_counter() - start) * 1000)
+
+    if not chunks:
+        yield "sources", {"sources": [], "prompt": None, "retrieval_ms": retrieval_ms}
+        yield "token", {"text": EMPTY_DB_MESSAGE}
+        yield "done", {"retrieval_ms": retrieval_ms, "generation_ms": 0}
+        return
+
+    context = build_context(chunks)
+    yield "sources", {
+        "sources": chunks,
+        "prompt": PROMPT.format(**prompt_vars(question, context)),
+        "retrieval_ms": retrieval_ms,
+    }
+
+    start = time.perf_counter()
+    # invoke() পুরো উত্তর শেষ হলে একবারে দেয়; stream() যত লেখা হয় তত টুকরো দিতে থাকে
+    for piece in get_llm().stream(PROMPT.format_messages(**prompt_vars(question, context))):
+        if piece.text:
+            yield "token", {"text": piece.text}
+
+    yield "done", {
+        "retrieval_ms": retrieval_ms,
+        "generation_ms": round((time.perf_counter() - start) * 1000),
     }

@@ -4,10 +4,12 @@ FastAPI backend — পুরো RAG সিস্টেমকে HTTP API হি
 ব্রাউজারে http://localhost:8000/docs খুললে সব endpoint নিজে চালিয়ে দেখা যাবে (Swagger UI)।
 """
 
+import json
 import os
 import threading
 
 from fastapi import FastAPI, HTTPException, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app import config, rag
@@ -97,3 +99,33 @@ def search(req: QuestionRequest):
 def ask(req: QuestionRequest):
     """পুরো RAG — retrieve করে LLM দিয়ে উত্তর বানায়।"""
     return {"question": req.question, **rag.answer(req.question, req.k)}
+
+
+@app.post("/ask/stream")
+def ask_stream(req: QuestionRequest):
+    """পুরো RAG, কিন্তু উত্তর টাইপ হতে হতে আসে (Server-Sent Events)।
+
+    রেসপন্স একটা লম্বা টেক্সট স্ট্রিম, যেখানে প্রতিটা event এরকম:
+        event: token
+        data: {"text": "..."}
+        <ফাঁকা লাইন>
+    web UI (frontend/public/app.js) এটা পড়ে পড়ে স্ক্রিনে বসায়।
+    """
+
+    def sse(event: str, data: dict) -> str:
+        return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+    def events():
+        try:
+            for event, data in rag.answer_stream(req.question, req.k):
+                yield sse(event, data)
+        except Exception as e:
+            # stream শুরু হয়ে যাওয়ার পর আর HTTP status বদলানো যায় না, তাই error ও একটা event
+            yield sse("error", {"message": str(e)})
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        # proxy (nginx) যেন টুকরোগুলো জমিয়ে না রেখে সাথে সাথে পাঠায়
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

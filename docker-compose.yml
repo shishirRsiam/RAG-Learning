@@ -1,8 +1,9 @@
-# পুরো RAG সিস্টেম — ৩টা সার্ভিস সবসময় চলে, ১টা (ingest) দরকার হলে চালানো হয়।
+# পুরো RAG সিস্টেম — ৪টা সার্ভিস সবসময় চলে, ১টা (ingest) দরকার হলে চালানো হয়।
 #
-#   ui (Streamlit :8501)  ──HTTP──>  api (FastAPI :8000)  ──HTTP──>  chromadb (Vector DB)
-#                                         │
-#                                         └──HTTPS──> Google Gemini API (embedding + LLM)
+#   web (Chat UI :3000)        ──/api──┐
+#                                      ├──>  api (FastAPI :8000)  ──HTTP──>  chromadb (Vector DB)
+#   streamlit (Inspector :8501) ──HTTP──┘          │
+#                                                  └──HTTPS──> Google Gemini API (embedding + LLM)
 #
 # সবগুলো container একই Docker network এ থাকে, তাই একে অপরকে service নাম দিয়ে ডাকে
 # (যেমন api থেকে http://chromadb:8000)।
@@ -77,25 +78,51 @@ services:
         condition: service_healthy
     profiles: ["tools"]
 
-  # ---------------------------------------------------------------- Frontend UI
-  ui:
+  # ---------------------------------------------------------------- Chat UI (মূল UI)
+  # nginx: HTML/CSS/JS দেয়, আর /api/... রিকোয়েস্ট api container এ পাঠায় (reverse proxy)
+  web:
     build: ./frontend
-    image: rag-learning-ui
+    image: rag-learning-web
+    ports:
+      - "3000:80"
+    depends_on:
+      api:
+        condition: service_healthy # API রেডি হওয়ার পরেই UI চালু হবে
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+    develop:
+      watch:
+        # HTML/CSS/JS সেভ করলেই container এ কপি হবে — ব্রাউজার রিফ্রেশ দিলেই নতুনটা দেখবে
+        - action: sync
+          path: ./frontend/public
+          target: /usr/share/nginx/html
+        - action: rebuild
+          path: ./frontend/nginx.conf
+
+  # ---------------------------------------------------------------- Streamlit Inspector
+  # একই API এর জন্য দ্বিতীয় একটা UI (Python দিয়ে লেখা) — RAG এর ধাপগুলো ধরে ধরে দেখার জন্য
+  streamlit:
+    build: ./streamlit
+    image: rag-learning-streamlit
     environment:
       API_URL: http://api:8000
     ports:
       - "8501:8501"
     depends_on:
       api:
-        condition: service_healthy # API রেডি হওয়ার পরেই UI চালু হবে
+        condition: service_healthy
     restart: unless-stopped
     develop:
       watch:
         - action: sync
-          path: ./frontend/streamlit_app.py
+          path: ./streamlit/streamlit_app.py
           target: /app/streamlit_app.py
         - action: rebuild
-          path: ./frontend/requirements.txt
+          path: ./streamlit/requirements.txt
 
 volumes:
   chroma_data:
