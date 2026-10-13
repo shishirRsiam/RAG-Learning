@@ -1,0 +1,101 @@
+# পুরো RAG সিস্টেম — ৩টা সার্ভিস সবসময় চলে, ১টা (ingest) দরকার হলে চালানো হয়।
+#
+#   ui (Streamlit :8501)  ──HTTP──>  api (FastAPI :8000)  ──HTTP──>  chromadb (Vector DB)
+#                                         │
+#                                         └──HTTPS──> Google Gemini API (embedding + LLM)
+#
+# সবগুলো container একই Docker network এ থাকে, তাই একে অপরকে service নাম দিয়ে ডাকে
+# (যেমন api থেকে http://chromadb:8000)।
+
+name: rag-learning
+
+services:
+  # ---------------------------------------------------------------- Vector DB
+  chromadb:
+    image: chromadb/chroma:1.5.9
+    volumes:
+      # named volume: container মুছে ফেললেও vector গুলো থেকে যায়
+      - chroma_data:/data
+    ports:
+      # হোস্ট থেকে দেখতে চাইলে: http://localhost:8001/api/v2/heartbeat
+      - "8001:8000"
+    healthcheck:
+      # এই image এ curl নেই, তাই bash দিয়ে দেখি 8000 পোর্ট খোলা কিনা
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/127.0.0.1/8000"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------- Backend API
+  api:
+    build: ./backend
+    image: rag-learning-backend
+    env_file: .env # GOOGLE_API_KEY এখান থেকে আসে
+    environment:
+      CHROMA_HOST: chromadb
+      CHROMA_PORT: 8000
+      DOCS_DIR: /app/docs
+    volumes:
+      # bind mount: হোস্টের ফোল্ডার container এর ভেতরে দেখা যায় (দুই দিকেই লাইভ)
+      - ${DOCS_PATH:-./docs}:/app/docs
+    ports:
+      - "8000:8000"
+    depends_on:
+      chromadb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+    develop:
+      # `docker compose up --watch` দিলে কোড বদলালেই container এ sync হয়ে রিস্টার্ট হবে
+      watch:
+        - action: sync+restart
+          path: ./backend/app
+          target: /app/app
+        - action: rebuild
+          path: ./backend/requirements.txt
+
+  # ---------------------------------------------------------------- Ingestion job
+  # সবসময় চলে না (profile: tools)। চালাতে: docker compose run --rm ingest
+  ingest:
+    image: rag-learning-backend # api এর বানানো একই image, শুধু command আলাদা
+    command: ["python", "-m", "app.ingest"]
+    env_file: .env
+    environment:
+      CHROMA_HOST: chromadb
+      CHROMA_PORT: 8000
+      DOCS_DIR: /app/docs
+    volumes:
+      - ${DOCS_PATH:-./docs}:/app/docs:ro
+    depends_on:
+      chromadb:
+        condition: service_healthy
+    profiles: ["tools"]
+
+  # ---------------------------------------------------------------- Frontend UI
+  ui:
+    build: ./frontend
+    image: rag-learning-ui
+    environment:
+      API_URL: http://api:8000
+    ports:
+      - "8501:8501"
+    depends_on:
+      api:
+        condition: service_healthy # API রেডি হওয়ার পরেই UI চালু হবে
+    restart: unless-stopped
+    develop:
+      watch:
+        - action: sync
+          path: ./frontend/streamlit_app.py
+          target: /app/streamlit_app.py
+        - action: rebuild
+          path: ./frontend/requirements.txt
+
+volumes:
+  chroma_data:

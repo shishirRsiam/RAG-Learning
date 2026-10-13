@@ -1,0 +1,32 @@
+CloudBox by Nexora Tech — Product FAQ (Sample)
+(Fictional product, created only for testing the RAG system.)
+
+Q: What is CloudBox?
+A: CloudBox is Nexora Tech's file storage and sharing service for small businesses.
+It lets teams store files, share links, and collaborate on documents from any device.
+
+Q: What plans are available?
+A: There are three plans:
+- Free: 5 GB storage, 1 user, share links expire after 7 days.
+- Team: 1 TB storage, up to 10 users, 500 BDT per user per month.
+- Business: 5 TB storage, unlimited users, 900 BDT per user per month, includes audit logs and SSO.
+
+Q: Is there a maximum file size?
+A: On the Free plan the maximum single file size is 250 MB. On Team and Business plans it is 10 GB.
+
+Q: How long are deleted files kept?
+A: Deleted files stay in the Trash for 30 days on Free and Team plans, and 180 days on the Business plan.
+After that they are permanently removed and cannot be recovered.
+
+Q: Where is my data stored?
+A: All data is stored in data centers in Singapore, with an encrypted backup copy in Frankfurt.
+Files are encrypted at rest with AES-256 and in transit with TLS 1.3.
+
+Q: How do I contact support?
+A: Free plan users can use the community forum. Team plan users get email support
+(support@cloudbox.example) with a 24-hour response time. Business plan users get
+24/7 phone support at +880-1700-000000 and a 2-hour response time.
+
+Q: Can I cancel anytime?
+A: Yes. Plans are billed monthly and you can cancel anytime from Settings > Billing.
+No refunds are given for partial months.

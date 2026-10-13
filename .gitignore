@@ -1,2 +1,13 @@
 venv/
 __pycache__/
+*.pyc
+
+# API key কখনো commit করবে না
+.env
+
+# নিজের ডকুমেন্ট (ফোল্ডারটা রাখি, ভেতরের ফাইল না)
+docs/*
+!docs/.gitkeep
+
+# পুরনো লোকাল ChromaDB (Docker ভার্সন named volume ব্যবহার করে)
+chroma_db/
